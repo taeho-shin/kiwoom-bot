@@ -245,8 +245,20 @@ def worker():
         except Exception as e:
             add_log(f"❌ [워커 오류] {e}")
 
-# 스레드 시작 (서버 켜질 때 같이 실행됨)
-threading.Thread(target=worker, daemon=True).start()
+# [중요] 스레드 생존 확인 및 실행 함수
+def start_worker_if_needed():
+    # 현재 실행 중인 모든 스레드 이름 확인
+    is_alive = False
+    for t in threading.enumerate():
+        if t.name == "KiwoomWorker":
+            is_alive = True
+            break
+            
+    # 없으면 새로 시작 (이름표 "KiwoomWorker" 부착)
+    if not is_alive:
+        add_log("🚑 워커 스레드가 감지되지 않아 새로 시작합니다.")
+        t = threading.Thread(target=worker, name="KiwoomWorker", daemon=True)
+        t.start()
 
 
 # --- [4. 웹 서버 라우팅] ---
