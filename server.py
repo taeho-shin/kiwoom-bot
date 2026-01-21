@@ -18,6 +18,8 @@ BASE_URL = "https://mockapi.kiwoom.com"
 
 # [매수 설정] 1회 진입 목표 금액 (원)
 TARGET_BUY_AMOUNT = 1000000 
+MAX_BUY_RANK = 7         # [NEW] 동시 매수 최대 종목 수
+BUFFER_SECONDS = 5       # [NEW] 랭킹 산정을 위해 기다리는 시간 (초)
 
 # [큐 설정] 주문을 대기시킬 큐 생성
 order_queue = queue.Queue()
@@ -191,85 +193,158 @@ class KiwoomAPI:
 
 kiwoom = KiwoomAPI()
 
-# --- [3. 백그라운드 워커 (Queue Processor)] ---
+# --- [3. 실행 로직 분리 (Execute Functions)] ---
+
+def execute_buy(data):
+    """매수 주문 집행 함수"""
+    ticker = data.get("ticker")
+    price = float(data.get("price", 0))
+    score = data.get("score", 0) # 점수 확인
+    
+    if price > 0:
+        buy_qty = int(TARGET_BUY_AMOUNT / price)
+        if buy_qty < 1: buy_qty = 1
+        
+        add_log(f"🏆 [순위권 매수] {ticker} (점수: {score}) -> {buy_qty}주 주문")
+        kiwoom.send_order("buy", ticker, price, buy_qty)
+    else:
+        add_log(f"⚠️ 가격 정보 오류로 매수 스킵: {ticker}")
+
+def execute_sell(data):
+    """매도 주문 집행 함수"""
+    ticker = data.get("ticker")
+    action_raw = data.get("action", "")
+    
+    # 1. 잔고 조회
+    current_qty = kiwoom.get_stock_balance(ticker)
+    time.sleep(0.2) # API 안정성 대기
+
+    if current_qty > 0:
+        sell_qty = 0
+        log_msg = ""
+        
+        # 2. 청산 전략에 따른 수량 계산
+        if "Profit Target 1" in action_raw:
+            sell_qty = int(current_qty / 2) # 50%
+            if sell_qty < 1: sell_qty = 1
+            log_msg = "💰 TP 1 (50%)"
+            
+        elif any(k in action_raw for k in ["Profit Target 2", "Final Exit", "Final Stop Loss", "Exit Breakeven"]):
+            sell_qty = current_qty          # 전량
+            log_msg = "👋 전량 청산"
+            
+        elif any(k in action_raw for k in ["Stop Loss 1", "Stop Loss 2"]):
+            sell_qty = int(current_qty * 0.3) # 30%
+            if sell_qty < 1: sell_qty = 1
+            log_msg = "📉 부분 손절 (30%)"
+        
+        else:
+            # 기타 안전장치 (기본 1/3)
+            sell_qty = int(current_qty / 3)
+            if sell_qty < 1: sell_qty = 1
+            log_msg = "✂️ 일반 분할 청산"
+
+        add_log(f"{log_msg} {ticker} | {sell_qty}주 매도 실행")
+        kiwoom.send_order("sell", ticker, 0, sell_qty)
+    else:
+        add_log(f"🚫 [매도 불가] {ticker} 보유 잔고 없음")
+
+# --- [4. 스마트 워커 (Smart Worker)] ---
+
 def worker():
-    """큐에서 작업을 하나씩 꺼내 순차적으로 실행하는 작업자"""
-    add_log("👷 백그라운드 워커가 시작되었습니다.")
+    """버퍼링 및 랭킹 시스템이 적용된 워커"""
+    add_log("👷 백그라운드 워커(스마트 랭킹)가 시작되었습니다.")
+    
+    buy_buffer = []          # 매수 후보를 모아둘 바구니
+    flush_deadline = None    # 바구니를 비워야 할 마감 시간
+    
     while True:
         try:
-            # 큐에서 데이터 꺼내기 (데이터가 없으면 대기)
-            data = order_queue.get()
+            # 1. 큐에서 데이터 가져오기 (0.5초 타임아웃으로 주기적 버퍼 체크)
+            try:
+                data = order_queue.get(timeout=0.5)
+            except queue.Empty:
+                data = None
             
-            ticker = data.get("ticker")
-            action_raw = data.get("action", "")
-            price = float(data.get("price", 0))
-
-            add_log(f"⚙️ [처리 시작] {ticker} | {action_raw}")
-
-            # --- [매수 로직] ---
-            if "BUY" in action_raw:
-                if price > 0:
-                    buy_qty = int(TARGET_BUY_AMOUNT / price)
-                    if buy_qty < 1: buy_qty = 1
-                    kiwoom.send_order("buy", ticker, price, buy_qty)
-                else:
-                    add_log("⚠️ 가격 정보 오류로 매수 불가")
-
-            # --- [매도 로직] ---
-            elif any(k in action_raw for k in ["Profit", "Stop", "Exit"]):
-                current_qty = kiwoom.get_stock_balance(ticker)
+            # 2. 데이터 처리
+            if data:
+                action = data.get("action", "")
                 
-                # 잔고 조회 API 호출 후 잠시 대기 (안정성 확보)
-                time.sleep(0.2) 
-
-                if current_qty > 0:
-                    if "Final Exit" in action_raw:
-                        sell_qty = current_qty
-                        add_log(f"👋 [전량 청산] {current_qty}주 매도")
-                    else:
-                        sell_qty = int(current_qty / 3)
-                        if sell_qty < 1: sell_qty = 1
-                        add_log(f"✂️ [분할 청산] {sell_qty}주 매도")
+                # [A] 매도 신호: 즉시 처리 (우선순위 높음)
+                if any(k in action for k in ["Profit", "Stop", "Exit"]):
+                    add_log(f"⚡ [매도 급행] {data.get('ticker')} 즉시 처리")
+                    execute_sell(data)
+                    time.sleep(1) # 주문 간 쿨타임
+                
+                # [B] 매수 신호: 버퍼에 담기
+                elif "BUY" in action:
+                    # 버퍼가 비어있다면 타이머 시작 (첫 손님 입장 후 5초 카운트)
+                    if not buy_buffer:
+                        flush_deadline = time.time() + BUFFER_SECONDS
+                        add_log(f"⏳ [매수 접수] 5초간 후보를 모읍니다... (현재 1번째)")
                     
-                    kiwoom.send_order("sell", ticker, 0, sell_qty)
-                else:
-                    add_log(f"🚫 [매도 불가] 잔고 없음")
-            
-            # --- [처리 완료 후 휴식] ---
-            # API 레이트 리밋 보호를 위해 작업 간 0.5초 딜레이
-            time.sleep(2) 
-            
-            # 큐 작업 완료 처리
-            order_queue.task_done()
+                    buy_buffer.append(data)
+                    add_log(f"📥 [후보 등록] {data.get('ticker')} (Score: {data.get('score', 0)})")
+                
+                order_queue.task_done()
+
+            # 3. 버퍼 체크 및 일괄 처리
+            # 버퍼에 내용이 있고, 마감 시간이 지났다면?
+            if buy_buffer and flush_deadline and time.time() >= flush_deadline:
+                add_log(f"⚖️ [랭킹 산정] 총 {len(buy_buffer)}개 후보 중 상위 {MAX_BUY_RANK}개 선발")
+                
+                # (1) 점수 기준 내림차순 정렬
+                # score가 없으면 0점으로 처리
+                sorted_buys = sorted(buy_buffer, key=lambda x: float(x.get("score", 0)), reverse=True)
+                
+                # (2) 상위 N개 선발 및 나머지 탈락
+                final_targets = sorted_buys[:MAX_BUY_RANK]
+                dropped_targets = sorted_buys[MAX_BUY_RANK:]
+                
+                # (3) 선발된 종목 매수 집행
+                for target in final_targets:
+                    execute_buy(target)
+                    time.sleep(1) # 주문 폭주 방지 딜레이
+                    
+                # (4) 탈락 종목 로그
+                if dropped_targets:
+                    dropped_tickers = [d.get('ticker') for d in dropped_targets]
+                    add_log(f"🗑️ [매수 제외] 순위 밖 {len(dropped_targets)}종목: {dropped_tickers}")
+                
+                # (5) 버퍼 초기화
+                buy_buffer = []
+                flush_deadline = None
+                add_log("🏁 [배치 처리 완료] 대기 모드 전환")
 
         except Exception as e:
             add_log(f"❌ [워커 오류] {e}")
+            time.sleep(1)
 
-# [중요] 스레드 생존 확인 및 실행 함수
+# 스레드 생존 확인 및 복구
 def start_worker_if_needed():
-    # 현재 실행 중인 모든 스레드 이름 확인
     is_alive = False
     for t in threading.enumerate():
         if t.name == "KiwoomWorker":
             is_alive = True
             break
             
-    # 없으면 새로 시작 (이름표 "KiwoomWorker" 부착)
     if not is_alive:
-        add_log("🚑 워커 스레드가 감지되지 않아 새로 시작합니다.")
+        add_log("🚑 워커 스레드 복구 및 재시작")
         t = threading.Thread(target=worker, name="KiwoomWorker", daemon=True)
         t.start()
 
+# 최초 실행 시 스레드 시작
+threading.Thread(target=worker, name="KiwoomWorker", daemon=True).start()
 
-# --- [4. 웹 서버 라우팅] ---
+# --- [5. 웹 서버 라우팅] ---
 @app.route('/')
 def index():
     html = """
     <html><head><title>Kiwoom Bot Logs</title>
     <meta http-equiv="refresh" content="3">
     <style>body{background:#1e1e1e;color:#0f0;padding:20px;font-family:monospace;}
-    .log{border-bottom:1px solid #333;padding:5px;}</style></head><body>
-    <h2>Kiwoom Trading Bot (Queue System Active)</h2><div id="logs">
+    .log{border-bottom:1px solid #333;padding:5px;font-size:14px;}</style></head><body>
+    <h2>Kiwoom Smart Trading Bot (Ranking System Active)</h2><div id="logs">
     """
     for log in server_logs:
         html += f"<div class='log'>{log}</div>"
@@ -278,13 +353,11 @@ def index():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # [핵심] 요청이 올 때마다 일꾼이 살아있는지 체크!
-        start_worker_if_needed()
+        start_worker_if_needed() # 일꾼 생존 확인
 
         raw_data = request.get_data(as_text=True)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
-        # 데이터 파싱
         if "||" in raw_data:
             json_str = raw_data.split("||")[1]
             data = json.loads(json_str)
@@ -294,19 +367,19 @@ def webhook():
             except:
                 return jsonify({"status": "error"}), 400
 
-        # 테스트용 변환
+        # 해외주식 티커 변환 (테스트용)
         if data.get("ticker") in ["NVDA", "TSLA", "AAPL", "QQQ", "SPY"]:
             data["ticker"] = "005930"
             if data.get("price", 0) > 100000: data["price"] = 60000
 
-        # [핵심 변경] 여기서 직접 주문하지 않고 큐에 넣기만 함!
+        # 큐에 넣기 (처리는 워커가 함)
         order_queue.put(data)
         
-        # 큐 사이즈 확인용 로그
+        # 로그는 간략하게
         q_size = order_queue.qsize()
-        add_log(f"📥 [큐 적재] 대기열: {q_size}개 | {data.get('ticker')} - {data.get('action')}")
+        # add_log(f"📥 [수신] {data.get('ticker')} (대기열: {q_size})")
 
-        return jsonify({"status": "queued", "message": "Order added to queue"}), 200
+        return jsonify({"status": "queued"}), 200
 
     except Exception as e:
         add_log(f"❌ [Webhook Error] {e}")
