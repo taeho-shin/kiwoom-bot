@@ -278,6 +278,9 @@ def index():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
+        # [핵심] 요청이 올 때마다 일꾼이 살아있는지 체크!
+        start_worker_if_needed()
+        
         raw_data = request.get_data(as_text=True)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
