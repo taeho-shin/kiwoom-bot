@@ -114,7 +114,11 @@ class KiwoomAPI:
             add_log(f"❌ [시스템 오류] 잔고 조회 중: {e}")
             return 0
 
-    def send_order(self, trade_type, ticker, price, qty):
+    def send_order(self, trade_type, ticker, price, qty, retry=True):
+        """
+        주문 전송 함수
+        - retry: 토큰 만료/오류 시 1회 재시도 여부
+        """
         global ACCESS_TOKEN
         if not ACCESS_TOKEN: 
             if not self.get_token(): return {"status": "fail"}
@@ -126,8 +130,10 @@ class KiwoomAPI:
 
         url = f"{self.base_url}/api/dostk/ordr"
         headers = self.headers.copy()
+        
+        # [수정 1] Authorization 헤더의 키를 표준(대문자 A)으로 변경 (호환성 향상)
         headers.update({
-            "authorization": f"Bearer {ACCESS_TOKEN}",
+            "Authorization": f"Bearer {ACCESS_TOKEN}",
             "appkey": APP_KEY,
             "appsecret": APP_SECRET,
             "tr_id": tr_id,
@@ -152,18 +158,38 @@ class KiwoomAPI:
             
             if res.status_code == 200:
                 result = res.json()
-                if result.get('return_code') == "0" or result.get('rt_cd') == "0":
-                    msg = result.get('return_msg') or result.get('msg1')
+                rt_cd = result.get('return_code') or result.get('rt_cd')
+                msg = result.get('return_msg') or result.get('msg1')
+
+                # 성공 (0)
+                if str(rt_cd) == "0":
                     add_log(f"✅ [체결 성공] 주문번호:{result.get('ord_no')} | {msg}")
+                    return {"status": "success", "data": result}
+                
+                # [수정 2] 실패했지만 토큰 관련 에러(8005 등)라면 재시도
+                # 8005: 유효하지 않은 토큰, 8001: 인증 실패 등
+                elif retry and (str(rt_cd) == "8005" or "Token" in str(msg)):
+                    add_log(f"🔄 [토큰 만료 감지] {msg} -> 재발급 후 재시도")
+                    ACCESS_TOKEN = None # 기존 토큰 폐기
+                    if self.get_token():
+                        # 재귀 호출 시 retry=False로 하여 무한 루프 방지
+                        return self.send_order(trade_type, ticker, price, qty, retry=False)
+                
                 else:
-                    msg = result.get('return_msg') or result.get('msg1')
-                    add_log(f"❌ [주문 거절] {msg}")
+                    add_log(f"❌ [주문 거절] 코드:{rt_cd} | {msg}")
+                    return {"status": "fail", "data": result}
             else:
+                # HTTP 401 등 통신 레벨의 에러 처리
                 add_log(f"❌ [통신 실패] Status: {res.status_code} | {res.text}")
-                if res.status_code == 401: 
-                    if self.get_token(): return self.send_order(trade_type, ticker, price, qty)
+                if res.status_code == 401 and retry: 
+                    add_log("🔄 [HTTP 401] 토큰 재발급 후 재시도...")
+                    if self.get_token(): 
+                        return self.send_order(trade_type, ticker, price, qty, retry=False)
+                return {"status": "fail", "data": res.text}
+
         except Exception as e:
             add_log(f"❌ [실행 오류] {e}")
+            return {"status": "error", "msg": str(e)}
 
 kiwoom = KiwoomAPI()
 
