@@ -342,9 +342,16 @@ def index():
     html = """
     <html><head><title>Kiwoom Bot Logs</title>
     <meta http-equiv="refresh" content="3">
-    <style>body{background:#1e1e1e;color:#0f0;padding:20px;font-family:monospace;}
-    .log{border-bottom:1px solid #333;padding:5px;font-size:14px;}</style></head><body>
-    <h2>Kiwoom Smart Trading Bot (Ranking System Active)</h2><div id="logs">
+    <style>
+        /* 배경색 변경 (옵션) */
+        body { background-color: #101010; color: #FFB000; padding: 20px; font-family: monospace; }
+        
+        /* 로그 구분선 색상도 살짝 맞춰주면 예쁩니다 */
+        .log { border-bottom: 1px solid #333; padding: 5px; font-size: 14px; }
+    </style>
+    </head><body>
+    <h2 style="color: #FFB000;">Kiwoom Smart Trading Bot</h2>
+    <div id="logs">
     """
     for log in server_logs:
         html += f"<div class='log'>{log}</div>"
