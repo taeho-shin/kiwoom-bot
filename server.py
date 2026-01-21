@@ -237,7 +237,7 @@ def worker():
             
             # --- [처리 완료 후 휴식] ---
             # API 레이트 리밋 보호를 위해 작업 간 0.5초 딜레이
-            time.sleep(0.5) 
+            time.sleep(2) 
             
             # 큐 작업 완료 처리
             order_queue.task_done()
@@ -280,7 +280,7 @@ def webhook():
     try:
         # [핵심] 요청이 올 때마다 일꾼이 살아있는지 체크!
         start_worker_if_needed()
-        
+
         raw_data = request.get_data(as_text=True)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
