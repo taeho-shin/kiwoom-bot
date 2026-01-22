@@ -366,24 +366,34 @@ def webhook():
         add_log(raw_data)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
-        if "||" in raw_data:
-            json_str = raw_data.split("||")[1]
-            data = json.loads(json_str)
-        else:
-            try:
-                data = json.loads(raw_data)
-            except:
-                return jsonify({"status": "error"}), 400
+        data = None
+        # 1. 일반 JSON 파싱 시도 (가장 우선)
+        try:
+            data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            # 2. JSON 파싱 실패 시, 트레이딩뷰 포맷(||) 시도
+            if "||" in raw_data:
+                try:
+                    # '||'가 여러 개 있을 수 있으니 첫 번째 것만 기준으로 나눔 (maxsplit=1)
+                    parts = raw_data.split("||", 1)
+                    json_str = parts[1]
+                    data = json.loads(json_str)
+                except Exception as e:
+                    add_log(f"❌ [파싱 실패 - Split] {e} | Data: {raw_data}")
+                    return jsonify({"status": "error", "reason": "invalid split format"}), 400
+            else:
+                # '||'도 없고 JSON도 아니면 에러
+                add_log(f"❌ [파싱 실패 - JSON] {raw_data}")
+                return jsonify({"status": "error", "reason": "invalid json"}), 400
 
-        # 해외주식 티커 변환 (테스트용)
+        # 테스트용 변환
         if data.get("ticker") in ["NVDA", "TSLA", "AAPL", "QQQ", "SPY"]:
             data["ticker"] = "005930"
             if data.get("price", 0) > 100000: data["price"] = 60000
 
-        # 큐에 넣기 (처리는 워커가 함)
+        # 큐에 넣기
         order_queue.put(data)
         
-        # 로그는 간략하게
         q_size = order_queue.qsize()
         add_log(f"📥 [수신] {data.get('ticker')} (대기열: {q_size})")
 
