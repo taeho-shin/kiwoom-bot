@@ -334,7 +334,7 @@ def start_worker_if_needed():
         t.start()
 
 # 최초 실행 시 스레드 시작
-threading.Thread(target=worker, name="KiwoomWorker", daemon=True).start()
+# threading.Thread(target=worker, name="KiwoomWorker", daemon=True).start()
 
 # --- [5. 웹 서버 라우팅] ---
 @app.route('/')
@@ -363,6 +363,7 @@ def webhook():
         start_worker_if_needed() # 일꾼 생존 확인
 
         raw_data = request.get_data(as_text=True)
+        add_log(raw_data)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
         if "||" in raw_data:
