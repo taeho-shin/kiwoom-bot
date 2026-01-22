@@ -81,7 +81,7 @@ class KiwoomAPI:
         
         headers = self.headers.copy()
         headers.update({
-            "authorization": f"Bearer {self.access_token}",
+            "authorization": f"Bearer {ACCESS_TOKEN}",
             "api-id": "kt00018",
         })
 
