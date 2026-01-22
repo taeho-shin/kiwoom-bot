@@ -162,7 +162,7 @@ class KiwoomAPI:
                 msg = result.get('return_msg', "XXXXX")
 
                 # 성공 (0)
-                if str(rt_cd) == 0:
+                if str(rt_cd) == "0":
                     add_log(f"✅ [주문 체결 성공] 주문번호:{ord_no} | {msg}")
                     return {"status": "success", "data": result}
                 
@@ -385,7 +385,7 @@ def webhook():
         
         # 로그는 간략하게
         q_size = order_queue.qsize()
-        # add_log(f"📥 [수신] {data.get('ticker')} (대기열: {q_size})")
+        add_log(f"📥 [수신] {data.get('ticker')} (대기열: {q_size})")
 
         return jsonify({"status": "queued"}), 200
 
