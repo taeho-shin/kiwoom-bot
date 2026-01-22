@@ -6,6 +6,7 @@ import threading
 import queue
 from flask import Flask, request, jsonify
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import deque
 
 app = Flask(__name__)
@@ -13,7 +14,6 @@ app = Flask(__name__)
 # --- [1. 환경변수 및 설정] ---
 APP_KEY = os.environ.get("APP_KEY")
 APP_SECRET = os.environ.get("APP_SECRET")
-ACCOUNT_NO = os.environ.get("ACCOUNT_NO", "81185095") 
 BASE_URL = "https://mockapi.kiwoom.com"
 
 # [매수 설정] 1회 진입 목표 금액 (원)
@@ -25,7 +25,7 @@ BUFFER_SECONDS = 5       # [NEW] 랭킹 산정을 위해 기다리는 시간 (�
 order_queue = queue.Queue()
 
 # [로그 설정] 최근 50개 로그 저장
-server_logs = deque(maxlen=50)
+server_logs = deque()
 
 # 전역 변수
 ACCESS_TOKEN = None
@@ -33,7 +33,7 @@ ACCESS_TOKEN = None
 # --- [2. 헬퍼 함수: 로그 기록] ---
 def add_log(message):
     """시스템 로그를 메모리에 저장하고 콘솔에도 출력"""
-    time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    time_str = datetime.now(ZoneInfo("Asia/Seoul")).strftime('%Y-%m-%d %H:%M:%S')
     log_entry = f"[{time_str}] {message}"
     print(log_entry) # 콘솔 출력 (Render Logs)
     server_logs.appendleft(log_entry) # 웹 표시용 리스트에 추가 (최신순)
@@ -101,18 +101,19 @@ class KiwoomAPI:
                 for stock in balance:
                     # pdno(종목코드)에 ticker가 포함되는지 확인
                     if ticker in stock.get('stk_nm', ''):
+                        name = stock.get('stk_nm', 'XXXX')
                         qty = int(stock.get('rmnd_qty', 0))
                         add_log(f"🧐 [잔고 확인] {stock.get('stk_nm')}({ticker}) 보유량: {qty}주")
-                        return qty
+                        return name, qty
                 
                 # add_log(f"🧐 [잔고 확인] {ticker} 보유 없음 (0주)")
-                return 0
+                return 0, 0
             else:
                 add_log(f"❌ [잔고 조회 실패] {res.text}")
-                return 0
+                return 0, 0
         except Exception as e:
             add_log(f"❌ [시스템 오류] 잔고 조회 중: {e}")
-            return 0
+            return 0, 0
 
     def send_order(self, trade_type, ticker, price, qty, retry=True):
         """
@@ -152,7 +153,13 @@ class KiwoomAPI:
         }
 
         try:
-            add_log(f"🚀 [{tr_type_nm} 전송] {ticker} | {qty}주 | {ord_prc}원")
+            # Get ticker name
+            res = requests.post(url=f"{self.base_url}/api/dostk/stkinfo",
+                                headers={"authorization": f"Bearer {ACCESS_TOKEN}",
+                                         "api-id": api_id},
+                                json={"stk_cd": ticker})
+            name = res.json().get("name", "XXXX")
+            add_log(f"🚀 [{tr_type_nm} 전송] {ticker} | {name} | {qty}주 | {ord_prc}원")
             res = requests.post(url, headers=headers, json=json)
             
             if res.status_code == 200:
@@ -216,7 +223,7 @@ def execute_sell(data):
     action_raw = data.get("action", "")
     
     # 1. 잔고 조회
-    current_qty = kiwoom.get_stock_balance(ticker)
+    name, current_qty = kiwoom.get_stock_balance(ticker)
     time.sleep(0.2) # API 안정성 대기
 
     if current_qty > 0:
@@ -244,7 +251,7 @@ def execute_sell(data):
             if sell_qty < 1: sell_qty = 1
             log_msg = "✂️ 일반 분할 청산"
 
-        add_log(f"{log_msg} {ticker} | {sell_qty}주 매도 실행")
+        add_log(f"{log_msg} {ticker} | {name} | {sell_qty}주 매도 실행")
         kiwoom.send_order("sell", ticker, 0, sell_qty)
     else:
         add_log(f"🚫 [매도 불가] {ticker} 보유 잔고 없음")
@@ -269,12 +276,13 @@ def worker():
             # 2. 데이터 처리
             if data:
                 action = data.get("action", "")
-                
+                country = data.get("country", "")
                 # [A] 매도 신호: 즉시 처리 (우선순위 높음)
                 if any(k in action for k in ["Profit", "Stop", "Exit"]):
                     add_log(f"⚡ [매도 급행] {data.get('ticker')} 즉시 처리")
-                    execute_sell(data)
-                    time.sleep(1) # 주문 간 쿨타임
+                    if country != "US":
+                        execute_sell(data)
+                        time.sleep(1) # 주문 간 쿨타임
                 
                 # [B] 매수 신호: 버퍼에 담기
                 elif "BUY" in action:
@@ -295,21 +303,30 @@ def worker():
                 
                 # (1) 점수 기준 내림차순 정렬
                 # score가 없으면 0점으로 처리
-                sorted_buys = sorted(buy_buffer, key=lambda x: float(x.get("score", 0)), reverse=True)
+                buy_buffer_scored = []
+                for buy in buy_buffer:
+                    if buy.get("score") > 50:
+                        buy_buffer_scored.append(buy)
+                    else:
+                        add_log(f"[후보 제외] {data.get('ticker')} | 점수: {data.get('score')}")
+                
+
+                sorted_buys = sorted(buy_buffer_scored, key=lambda x: float(x.get("score", 0)), reverse=True)
                 
                 # (2) 상위 N개 선발 및 나머지 탈락
                 final_targets = sorted_buys[:MAX_BUY_RANK]
                 dropped_targets = sorted_buys[MAX_BUY_RANK:]
                 
                 # (3) 선발된 종목 매수 집행
-                for target in final_targets:
-                    execute_buy(target)
-                    time.sleep(1) # 주문 폭주 방지 딜레이
-                    
-                # (4) 탈락 종목 로그
-                if dropped_targets:
-                    dropped_tickers = [d.get('ticker') for d in dropped_targets]
-                    add_log(f"🗑️ [매수 제외] 순위 밖 {len(dropped_targets)}종목: {dropped_tickers}")
+                if country != "US":
+                    for target in final_targets:
+                        execute_buy(target)
+                        time.sleep(1) # 주문 폭주 방지 딜레이
+
+                    # (4) 탈락 종목 로그
+                    if dropped_targets:
+                        dropped_tickers = [d.get('ticker') for d in dropped_targets]
+                        add_log(f"🗑️ [매수 제외] 순위 밖 {len(dropped_targets)}종목: {dropped_tickers}")
                 
                 # (5) 버퍼 초기화
                 buy_buffer = []
@@ -332,9 +349,6 @@ def start_worker_if_needed():
         add_log("🚑 워커 스레드 복구 및 재시작")
         t = threading.Thread(target=worker, name="KiwoomWorker", daemon=True)
         t.start()
-
-# 최초 실행 시 스레드 시작
-# threading.Thread(target=worker, name="KiwoomWorker", daemon=True).start()
 
 # --- [5. 웹 서버 라우팅] ---
 @app.route('/')
@@ -363,7 +377,7 @@ def webhook():
         start_worker_if_needed() # 일꾼 생존 확인
 
         raw_data = request.get_data(as_text=True)
-        add_log(raw_data)
+        # add_log(raw_data)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
         # [핵심 수정] 줄바꿈 문자를 강제로 제거 (JSON 에러 방지)
@@ -390,16 +404,11 @@ def webhook():
                 add_log(f"❌ [파싱 실패 - JSON] {raw_data}")
                 return jsonify({"status": "error", "reason": "invalid json"}), 400
 
-        # 테스트용 변환
-        if data.get("ticker") in ["NVDA", "TSLA", "AAPL", "QQQ", "SPY"]:
-            data["ticker"] = "005930"
-            if data.get("price", 0) > 100000: data["price"] = 60000
-
         # 큐에 넣기
         order_queue.put(data)
         
         q_size = order_queue.qsize()
-        add_log(f"📥 [수신] {data.get('ticker')} (대기열: {q_size})")
+        add_log(f"📥 [수신] {data.get('ticker')} | {data.get('action')} (대기열: {q_size})")
 
         return jsonify({"status": "queued"}), 200
 
