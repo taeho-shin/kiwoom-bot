@@ -305,14 +305,11 @@ def worker():
                 # score가 없으면 0점으로 처리
                 buy_buffer_scored = []
                 for buy in buy_buffer:
-                    if buy != None:
-                        score = buy.get("score", 0)
-                    else:
-                        score = 0
+                    score = buy.get("score", 0)
                     if score > 50:
                         buy_buffer_scored.append(buy)
                     else:
-                        add_log(f"[후보 제외] {data.get('ticker')} | 점수: {score}")
+                        add_log(f"[후보 제외] {buy.get('ticker')} | 점수: {score}")
                 
 
                 sorted_buys = sorted(buy_buffer_scored, key=lambda x: float(x.get("score", 0)), reverse=True)
