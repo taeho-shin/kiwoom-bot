@@ -366,6 +366,10 @@ def webhook():
         add_log(raw_data)
         if not raw_data: return jsonify({"status": "no data"}), 400
 
+        # [핵심 수정] 줄바꿈 문자를 강제로 제거 (JSON 에러 방지)
+        # 줄바꿈(\n)과 리턴(\r)을 공백으로 치환합니다.
+        raw_data = raw_data.replace('\n', ' ').replace('\r', '')
+        
         data = None
         # 1. 일반 JSON 파싱 시도 (가장 우선)
         try:
