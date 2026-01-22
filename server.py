@@ -305,7 +305,10 @@ def worker():
                 # score가 없으면 0점으로 처리
                 buy_buffer_scored = []
                 for buy in buy_buffer:
-                    score = buy.get("score", 0)
+                    if buy != None:
+                        score = buy.get("score", 0)
+                    else:
+                        score = 0
                     if score > 50:
                         buy_buffer_scored.append(buy)
                     else:
