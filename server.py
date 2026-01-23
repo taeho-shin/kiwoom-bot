@@ -156,9 +156,10 @@ class KiwoomAPI:
             # Get ticker name
             res = requests.post(url=f"{self.base_url}/api/dostk/stkinfo",
                                 headers={"authorization": f"Bearer {ACCESS_TOKEN}",
-                                         "api-id": api_id},
+                                         "api-id": "ka10100"},
                                 json={"stk_cd": ticker})
-            name = res.json().get("name", "XXXX")
+            name = res.json().get("stk_nm", "XXXX")
+            time.sleep(1)
             add_log(f"🚀 [{tr_type_nm} 전송] {ticker} | {name} | {qty}주 | {ord_prc}원")
             res = requests.post(url, headers=headers, json=json)
             
