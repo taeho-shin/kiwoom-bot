@@ -115,7 +115,7 @@ class KiwoomAPI:
             add_log(f"❌ [시스템 오류] 잔고 조회 중: {e}")
             return 0, 0
 
-    def send_order(self, trade_type, ticker, price, qty, retry=True):
+    def send_order(self, trade_type, ticker, price, qty, stop=0, retry=True):
         """
         주문 전송 함수
         - retry: 토큰 만료/오류 시 1회 재시도 여부
@@ -142,7 +142,10 @@ class KiwoomAPI:
             print("지정가 = 0원 -> 시장가 매수")
             trde_tp = "3"
         else:
-            trde_tp = "0"
+            if stop != 0:
+                trde_tp = "0"
+            else:
+                trde_tp = "28" # 스탑로스
 
         json = {
             "dmst_stex_tp": "KRX",
@@ -158,7 +161,7 @@ class KiwoomAPI:
                                 headers={"authorization": f"Bearer {ACCESS_TOKEN}",
                                          "api-id": "ka10100"},
                                 json={"stk_cd": ticker})
-            name = res.json().get("stk_nm", "XXXX")
+            name = res.json().get("name", "XXXX")
             time.sleep(1)
             add_log(f"🚀 [{tr_type_nm} 전송] {ticker} | {name} | {qty}주 | {ord_prc}원")
             res = requests.post(url, headers=headers, json=json)
@@ -181,7 +184,7 @@ class KiwoomAPI:
                     ACCESS_TOKEN = None # 기존 토큰 폐기
                     if self.get_token():
                         # 재귀 호출 시 retry=False로 하여 무한 루프 방지
-                        return self.send_order(trade_type, ticker, price, qty, retry=False)
+                        return self.send_order(trade_type, ticker, price, qty, stop, retry=False)
                 
                 else:
                     add_log(f"❌ [주문 거절] 코드:{rt_cd} | {msg}")
@@ -192,7 +195,7 @@ class KiwoomAPI:
                 if res.status_code == 401 and retry: 
                     add_log("🔄 [HTTP 401] 토큰 재발급 후 재시도...")
                     if self.get_token(): 
-                        return self.send_order(trade_type, ticker, price, qty, retry=False)
+                        return self.send_order(trade_type, ticker, price, qty, stop, retry=False)
                 return {"status": "fail", "data": res.text}
 
         except Exception as e:
@@ -208,13 +211,15 @@ def execute_buy(data):
     ticker = data.get("ticker")
     price = float(data.get("price", 0))
     score = data.get("score", 0) # 점수 확인
+    stop = data.get("stop", 0)
     
     if price > 0:
         buy_qty = int(TARGET_BUY_AMOUNT / price)
         if buy_qty < 1: buy_qty = 1
         
         add_log(f"🏆 [순위권 매수] {ticker} (점수: {score}) -> {buy_qty}주 주문")
-        kiwoom.send_order("buy", ticker, price, buy_qty)
+        kiwoom.send_order("buy", ticker, price, buy_qty, stop)
+        execute_sell(data) # stop loss
     else:
         add_log(f"⚠️ 가격 정보 오류로 매수 스킵: {ticker}")
 
@@ -222,6 +227,7 @@ def execute_sell(data):
     """매도 주문 집행 함수"""
     ticker = data.get("ticker")
     action_raw = data.get("action", "")
+    stop = data.get("stop", 0)
     
     # 1. 잔고 조회
     name, current_qty = kiwoom.get_stock_balance(ticker)
@@ -253,7 +259,7 @@ def execute_sell(data):
             log_msg = "✂️ 일반 분할 청산"
 
         add_log(f"{log_msg} {ticker} | {name} | {sell_qty}주 매도 실행")
-        kiwoom.send_order("sell", ticker, 0, sell_qty)
+        kiwoom.send_order("sell", ticker, price=stop, stop=stop, qty=sell_qty)
     else:
         add_log(f"🚫 [매도 불가] {ticker} 보유 잔고 없음")
 
@@ -410,7 +416,7 @@ def webhook():
         order_queue.put(data)
         
         q_size = order_queue.qsize()
-        add_log(f"📥 [수신] {data.get('ticker')} | {data.get('action')} (대기열: {q_size})")
+        add_log(f"📥 [수신] {data.get('ticker')} | {data.get('action')} | {data.get('detail')} (대기열: {q_size})")
 
         return jsonify({"status": "queued"}), 200
 
