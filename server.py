@@ -219,7 +219,7 @@ def execute_buy(data):
         
         add_log(f"🏆 [순위권 매수] {ticker} (점수: {score}) -> {buy_qty}주 주문")
         kiwoom.send_order("buy", ticker, price, buy_qty, stop)
-        execute_sell(data) # stop loss
+        # execute_sell(data) # stop loss
     else:
         add_log(f"⚠️ 가격 정보 오류로 매수 스킵: {ticker}")
 
