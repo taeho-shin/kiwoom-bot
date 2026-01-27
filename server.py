@@ -277,6 +277,7 @@ def execute_buy(data):
 
     # 잔고 및 종목명 조회
     cash, avail_qty = kiwoom.get_withdrawable_amount(ticker=ticker, price=price)
+    add_log(f"현금: {cash} | 구매가능수량: {avail_qty}")
     
     if price > 0:
         # 목표 금액에 따른 수량 계산
