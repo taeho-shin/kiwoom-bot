@@ -291,9 +291,14 @@ def execute_buy(data):
         # 주문 전송
         if buy_qty > 0:
             add_log(f"🏆 [최종 진입] {ticker} (점수: {score}) -> {buy_qty}주")
-            kiwoom.send_order(trade_type="buy", ticker=ticker, price=price, qty=buy_qty, stop=stop)
+            result = kiwoom.send_order(trade_type="buy", ticker=ticker, price=price, qty=buy_qty, stop=stop)
+            status = result.get("status", "fail")
+            kiwoom.get_withdrawable_amount(ticker=ticker, price=price)
+            return status
+
     else:
         add_log(f"⚠️ 가격 정보 오류({price})로 매수를 건너뜁니다: {ticker}")
+        return "error"
 
 def execute_sell(data):
     """
