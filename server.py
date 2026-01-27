@@ -168,7 +168,7 @@ class KiwoomAPI():
 
         payload = {
             "stk_cd": ticker,
-            # "uv": str(price), # API 요청 시 문자열 변환 필수
+            "uv": str(price), # API 요청 시 문자열 변환 필수
         }
 
         try:
