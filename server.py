@@ -168,15 +168,16 @@ class KiwoomAPI():
 
         payload = {
             "stk_cd": ticker,
-            "uv": str(price), # API 요청 시 문자열 변환 필수
+            # "uv": str(price), # API 요청 시 문자열 변환 필수
         }
 
         try:
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200:
                 data = res.json()
-                cash = int(data.get("ord_alowa", 0))          # 주문 가능 현금
-                avail_qty = math.floor(cash / price)
+                cash = int(data.get("min_ord_alow_amt", 100))          # 주문 가능 현금
+                avail_qty = int(data.get("min_ord_alowq", 100))
+                # avail_qty = math.floor(cash / price)
                 return cash, avail_qty
             return 0, 0 # 실패 시 0 반환
         except Exception as e:
