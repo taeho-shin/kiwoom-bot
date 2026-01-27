@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import deque
+import math
 
 app = Flask(__name__)
 
@@ -167,7 +168,7 @@ class KiwoomAPI():
 
         payload = {
             "stk_cd": ticker,
-            "uv": str(price) # API 요청 시 문자열 변환 필수
+            "uv": str(price), # API 요청 시 문자열 변환 필수
         }
 
         try:
@@ -175,7 +176,7 @@ class KiwoomAPI():
             if res.status_code == 200:
                 data = res.json()
                 cash = int(data.get("ord_alowa", 0))          # 주문 가능 현금
-                avail_qty = int(data.get("profa_100ord_alowq", 0)) # 증거금 100% 기준 가능 수량
+                avail_qty = math.floor(cash / price)
                 return cash, avail_qty
             return 0, 0 # 실패 시 0 반환
         except Exception as e:
@@ -294,7 +295,8 @@ def execute_buy(data):
             add_log(f"🏆 [최종 진입] {ticker} (점수: {score}) -> {buy_qty}주")
             result = kiwoom.send_order(trade_type="buy", ticker=ticker, price=price, qty=buy_qty, stop=stop)
             status = result.get("status", "fail")
-            kiwoom.get_withdrawable_amount(ticker=ticker, price=price)
+            _cash, _avail_qty = kiwoom.get_withdrawable_amount(ticker=ticker, price=price)
+            # add_log(f"주문완료 후 현금: {_cash} | 구매가능수량: {_avail_qty}")
             return status
 
     else:
@@ -513,6 +515,8 @@ def webhook():
 if __name__ == '__main__':
     # API 및 잔고 조회 테스트 코드 (실행 시 주석 해제하여 사용)
     print(">>> 시스템 시작 및 API 테스트 수행")
+    add_log("서버가 시작되었습니다. (http://127.0.0.1:5000)")
+    app.run(port=5000)
     
     # 1. 잔고 조회 테스트
     balance = kiwoom.get_stock_balance(ticker="005930") # 삼성전자
